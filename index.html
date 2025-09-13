@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Math Invaders</title>
+	<style>
+		body {
+			margin: 0;
+			padding: 0;
+			background: linear-gradient(180deg, #000428 0%, #004e92 100%);
+			font-family: 'Courier New', monospace;
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			min-height: 100vh;
+			color: white;
+		}
+
+		#gameContainer {
+			position: relative;
+			background: #000;
+			border: 3px solid #00ff00;
+			border-radius: 10px;
+			overflow: hidden;
+		}
+	</style>
+	<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.min.js"></script>
+</head>
+<body>
+	<div id="gameContainer"></div>
+
+	<script>
+		// Preload Scene
+		class PreloadScene extends Phaser.Scene {
+			constructor() {
+				super({ key: 'PreloadScene' });
+			}
+
+			preload() {
+				// Load enemy sprites
+				this.load.image('invader', 'invader.png');
+				this.load.image('fly', 'fly.png');
+				this.load.image('ladybug', 'ladybug.png');
+				// Load laser projectile
+				this.load.image('laser', 'laser.png');
+				// Load player ship
+				this.load.image('shooter', 'shooter.png');
+				// Load laser sound
+				this.load.audio('laserSound', 'laser.mp3');
+				// Load explosion sound
+				this.load.audio('explosionSound', 'explosion.mp3');
+			}
+
+			create() {
+				// Start the main game after loading
+				this.scene.start('StartScene');
+			}
+		}
+
+		// Start Scene
+		class StartScene extends Phaser.Scene {
+			constructor() {
+				super({ key: 'StartScene' });
+			}
+
+			create() {
+				// Background gradient effect
+				this.add.rectangle(400, 300, 800, 600, 0x001122);
+				
+				// Title
+				this.add.text(400, 200, 'MATH INVADERS', {
+					fontSize: '32px',
+					fill: '#00ff00',
+					fontFamily: 'Courier New'
+				}).setOrigin(0.5);
+
+				// Instructions
+				const instructions = [
+					'Defend Earth from the Math Invaders!',
+					'• Use ARROW KEYS to move',
+					'• Press SPACEBAR to shoot',
+					'• Shoot the CORRECT ANSWER to destroy enemies',
+					'• Answer quickly before they reach the bottom!'
+				];
+
+				instructions.forEach((instruction, index) => {
+					this.add.text(400, 280 + index * 25, instruction, {
+						fontSize: '16px',
+						fill: '#ffffff',
+						fontFamily: 'Courier New'
+					}).setOrigin(0.5);
+				});
+
+				// Start button
+				const startButton = this.add.text(400, 450, 'START MISSION', {
+					fontSize: '20px',
+					fill: '#000000',
+					backgroundColor: '#00ff00',
+					padding: { x: 20, y: 10 },
+					fontFamily: 'Courier New'
+				}).setOrigin(0.5);
+
+				startButton.setInteractive();
+				startButton.on('pointerdown', () => {
+					this.scene.start('GameScene');
+				});
+
+				startButton.on('pointerover', () => {
+					startButton.setStyle({ backgroundColor: '#00cc00' });
+				});
+
+				startButton.on('pointerout', () => {
+					startButton.setStyle({ backgroundColor: '#00ff00' });
+				});
+			}
+		}
+
+		// Game Scene
+		class GameScene extends Phaser.Scene {
+			constructor() {
+				super({ key: 'GameScene' });
+			}
+
+			init() {
+				// Game state
+				this.score = 0;
+				this.lives = 3;
+				this.wave = 1;
+				this.lastShotTime = 0;
+				this.ammoTime = 2500; // 2.5 seconds of ammo (5 shots × 0.5s each)
+				this.maxAmmoTime = 2500; // Maximum ammo time
+				this.shotCost = 500; // 0.5 seconds per shot
+				this.reloadTime = 2500; // 2.5 seconds to reload
+				this.isReloading = false;
+				this.reloadStartTime = 0;
+				this.ammoQueue = [];
+				
+				// Space Invaders specific state
+				this.enemyDirection = 1; // 1 for right, -1 for left
+				this.enemySpeed = 30; // Base speed for horizontal movement
+				this.enemyDropDistance = 30; // How far enemies drop when hitting edge
+				this.enemyMoveTimer = 0;
+				this.enemyMoveInterval = 1000; // Move every 1 second initially
+				this.enemySprites = ['invader', 'fly', 'ladybug']; // Available enemy sprites
+			}
+
+			create() {
+				// Initialize Phaser Groups
+				this.enemies = this.add.group();
+				this.bullets = this.add.group();
+
+				// Create starfield
+				this.createStarfield();
+
+				// Create player
+				this.createPlayer();
+
+				// Create UI
+				this.createUI();
+
+				// Create ammo preview
+				this.createAmmoPreview();
+
+				// Create first wave
+				this.createEnemyWave();
+				this.fillAmmoQueue();
+
+				// Initialize enemy movement timer
+				this.enemyMoveTimer = this.time.now;
+
+				// Input handling
+				this.cursors = this.input.keyboard.createCursorKeys();
+				this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+				// Collision detection
+				this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletEnemyCollision, null, this);
+			}
+
+			createStarfield() {
+				// Create a smaller number of stars to reduce texture operations
+				for (let i = 0; i < 50; i++) {
+					const star = this.add.circle(
+						Math.random() * 800,
+						Math.random() * 600,
+						1, // Fixed size to reduce texture variations
+						0xffffff,
+						0.8
+					);
+					
+					this.tweens.add({
+						targets: star,
+						y: star.y - 600,
+						duration: Math.random() * 10000 + 4000, 
+						repeat: -1,
+						ease: 'Linear',
+						onComplete: () => {
+							star.y = 800; // Start from further below the screen
+						}
+					});
+				}
+			}
+
+			createPlayer() {
+				// Create player container to hold ship sprite
+				this.player = this.add.container(400, 540);
+				
+				// Create player ship sprite
+				const playerSprite = this.add.image(0, 0, 'shooter');
+				playerSprite.setScale(2); // Scale appropriately
+				
+				// Add physics to the container
+				this.physics.add.existing(this.player);
+				this.player.body.setSize(playerSprite.width * 0.5, playerSprite.height * 0.5);
+				this.player.body.setCollideWorldBounds(true);
+				
+				// Add sprite to the container
+				this.player.add([playerSprite]);
+				
+				// Store reference for cleanup if needed
+				this.player.playerSprite = playerSprite;
+			}
+
+			createUI() {
+				this.scoreText = this.add.text(20, 20, 'Score: 0', {
+					fontSize: '18px',
+					fill: '#00ff00',
+					fontFamily: 'Courier New'
+				});
+
+				this.livesText = this.add.text(20, 50, 'Lives: 3', {
+					fontSize: '18px',
+					fill: '#00ff00',
+					fontFamily: 'Courier New'
+				});
+
+				this.waveText = this.add.text(20, 80, 'Wave: 1', {
+					fontSize: '18px',
+					fill: '#00ff00',
+					fontFamily: 'Courier New'
+				});
+			}
+
+			createAmmoPreview() {
+				this.ammoPreview = this.add.rectangle(400, 580, 120, 25, 0x000000, 0.7);
+				this.ammoPreview.setStrokeStyle(2, 0x00ff00);
+				
+				// Create ammo laser sprites container
+				this.ammoLaserSprites = [];
+				this.ammoTexts = [];
+				
+				// Cooldown indicator
+				this.cooldownBar = this.add.rectangle(400, 560, 120, 8, 0x333333);
+				this.cooldownBar.setStrokeStyle(1, 0x666666);
+				this.cooldownFill = this.add.rectangle(340, 560, 0, 8, 0xff4444);
+				this.cooldownFill.setOrigin(0, 0.5); // Anchor to left side
+				
+				// Reload indicator (red filling bar)
+				this.reloadFill = this.add.rectangle(340, 560, 0, 8, 0xff0000);
+				this.reloadFill.setOrigin(0, 0.5); // Anchor to left side
+				this.reloadFill.setVisible(false); // Hidden by default
+			}
+
+			generateMathProblem(difficulty) {
+			const operations = ['+', '-', '*', '/'];
+			const operation = operations[Math.floor(Math.random() * operations.length)];
+			let num1, num2, answer, display;
+
+			switch (operation) {
+				case '+':
+						// Addition: numbers 1-10, results up to 20
+						num1 = Math.floor(Math.random() * 10) + 1;
+						num2 = Math.floor(Math.random() * 10) + 1;
+					answer = num1 + num2;
+					display = `${num1}  +  ${num2}`;
+					break;
+
+				case '-':
+						// Subtraction: numbers 1-10, ensure positive results
+						num1 = Math.floor(Math.random() * 10) + 1;
+					num2 = Math.floor(Math.random() * num1) + 1;
+					answer = num1 - num2;
+					display = `${num1}  -  ${num2}`;
+					break;
+
+				case '*':
+						// Multiplication: numbers 1-10, results up to 100
+						num1 = Math.floor(Math.random() * 10) + 1;
+						num2 = Math.floor(Math.random() * 10) + 1;
+					answer = num1 * num2;
+					display = `${num1}  ×  ${num2}`;
+					break;
+
+				case '/':
+						// Division: ensure whole number results, divisors 1-10
+						answer = Math.floor(Math.random() * 10) + 1;
+						num2 = Math.floor(Math.random() * 10) + 1;
+					num1 = answer * num2;
+					display = `${num1}  ÷  ${num2}`;
+					break;
+			}
+
+			return { display, answer };
+		}
+
+			createEnemyWave() {
+				this.enemies.clear(true, true);
+				
+				// Create multiple rows of enemies (Space Invaders style)
+				const rows = Math.min(2 + this.wave - 1, 4); // Start with 2 rows, increase by 1 each wave, max 4
+				const enemiesPerRow = 8; // Number of enemies per row
+				const enemySpacing = 60; // Horizontal spacing between enemies
+				const rowSpacing = 60; // Vertical spacing between rows
+				const startX = 100; // Starting X position
+				const startY = 100; // Starting Y position
+				
+				const difficulty = Math.floor((this.wave - 1) / 2);
+
+				for (let row = 0; row < rows; row++) {
+					for (let col = 0; col < enemiesPerRow; col++) {
+						const x = startX + (col * enemySpacing);
+						const y = startY + (row * rowSpacing);
+						this.spawnSingleEnemy(x, y, difficulty, row);
+					}
+				}
+				
+				// Reset enemy movement parameters for new wave
+				this.enemyDirection = 1;
+				this.enemyMoveInterval = Math.max(500, 1000 - (this.wave * 50)); // Speed up with each wave
+			}
+
+			spawnSingleEnemy(x, y, difficulty, rowIndex) {
+				const problem = this.generateMathProblem(difficulty);
+				
+				// Create enemy container to hold all enemy parts
+				const enemyContainer = this.add.container(x, y);
+				
+				// Choose sprite based on row (different enemy types)
+				const spriteKey = this.enemySprites[rowIndex % this.enemySprites.length];
+				const enemySprite = this.add.image(0, 0, spriteKey);
+				
+				// Scale the sprite to appropriate size
+				enemySprite.setScale(1.0);
+				
+				// Rotate sprite clockwise 90 degrees
+				enemySprite.setRotation(Math.PI / 2);
+				
+				// Add physics to the container
+				this.physics.add.existing(enemyContainer);
+				enemyContainer.body.setSize(enemySprite.width * 1.0, enemySprite.height * 1.0);
+				enemyContainer.body.setOffset(-enemySprite.width * 0.5, -enemySprite.height * 0.5); // Center the collision box
+				enemyContainer.body.setVelocityY(0); // No vertical movement initially
+				
+				// Store problem data on the container
+				enemyContainer.problem = problem.display;
+				enemyContainer.answer = problem.answer;
+				enemyContainer.rowIndex = rowIndex;
+
+				// Math problem text
+				const problemText = this.add.text(0, 0, enemyContainer.problem, {
+					fontSize: '14px',
+					fill: '#ffffff',
+					fontFamily: 'Arial',
+					stroke: '#000000',
+					strokeThickness: 3,
+				}).setOrigin(0.5);
+
+				// Add all parts to the container
+				enemyContainer.add([enemySprite, problemText]);
+				
+				// Store references for cleanup if needed
+				enemyContainer.enemySprite = enemySprite;
+				enemyContainer.problemText = problemText;
+
+				this.enemies.add(enemyContainer);
+			}
+
+			moveEnemies() {
+				let shouldDrop = false;
+				let leftmostX = 800;
+				let rightmostX = 0;
+				
+				// Find the leftmost and rightmost enemies
+				this.enemies.children.entries.forEach(enemy => {
+					if (enemy.x < leftmostX) leftmostX = enemy.x;
+					if (enemy.x > rightmostX) rightmostX = enemy.x;
+				});
+				
+				// Check if enemies hit the screen edges
+				if ((this.enemyDirection === 1 && rightmostX >= 750) || 
+					(this.enemyDirection === -1 && leftmostX <= 50)) {
+					shouldDrop = true;
+					this.enemyDirection *= -1; // Reverse direction
+				}
+				
+				// Move all enemies smoothly
+				this.enemies.children.entries.forEach(enemy => {
+					if (shouldDrop) {
+						// Drop down
+						enemy.y += this.enemyDropDistance;
+					} else {
+						// Move horizontally smoothly based on delta time
+						enemy.x += this.enemyDirection * this.enemySpeed * this.game.loop.delta / 1000;
+					}
+				});
+			}
+
+			generateAmmo() {
+				if (this.enemies.children.size === 0) return null;
+				
+				// Only use correct answers from current enemies
+				const correctAnswers = this.enemies.children.entries.map(e => e.answer);
+				const randomAnswer = correctAnswers[Math.floor(Math.random() * correctAnswers.length)];
+
+			return {
+				value: randomAnswer,
+					isCorrect: true // Always correct since we only use correct answers
+				};
+			}
+
+			fillAmmoQueue() {
+				// Only keep one ammo at a time
+				if (this.ammoQueue.length === 0) {
+					const ammo = this.generateAmmo();
+					if (ammo) {
+						this.ammoQueue.push(ammo);
+					}
+				}
+				this.updateAmmoPreview();
+			}
+
+			rebuildAmmoQueue() {
+				// Only rebuild if there are enemies left
+				if (this.enemies.children.size === 0) {
+					// No enemies left, clear the ammo queue
+					this.ammoQueue = [];
+					this.updateAmmoPreview();
+					return;
+				}
+				
+				// Get current valid answers from remaining enemies
+				const validAnswers = this.enemies.children.entries.map(e => e.answer);
+				
+				// Remove ammo that's no longer valid (enemy destroyed)
+				this.ammoQueue = this.ammoQueue.filter(ammo => 
+					validAnswers.includes(ammo.value)
+				);
+				
+				// Refill the queue to maintain 1 ammo slot
+				this.fillAmmoQueue();
+			}
+
+			updateAmmoPreview() {
+				// Clear existing ammo sprites and texts
+				this.ammoLaserSprites.forEach(sprite => sprite.destroy());
+				this.ammoTexts.forEach(text => text.destroy());
+				this.ammoLaserSprites = [];
+				this.ammoTexts = [];
+				
+				if (this.ammoQueue.length > 0) {
+					// Show only the number text for single ammo
+					const ammo = this.ammoQueue[0];
+					const x = 400; // Center the single ammo
+					const y = 580;
+					
+					// Add number text only
+					const ammoText = this.add.text(x, y, ammo.value, {
+						fontSize: '18px',
+						fill: '#00ff00',
+						fontFamily: 'Arial',
+						stroke: '#000000',
+						strokeThickness: 2
+					}).setOrigin(0.5);
+					
+					this.ammoTexts.push(ammoText);
+				}
+			}
+
+			updateCooldownVisual() {
+				if (this.isReloading) {
+					// Show reload progress
+					const currentTime = this.time.now;
+					const reloadProgress = Math.min((currentTime - this.reloadStartTime) / this.reloadTime, 1);
+					const barWidth = reloadProgress * 120;
+					this.reloadFill.setSize(barWidth, 8);
+					this.reloadFill.setFillStyle(0xff0000); // Red reload bar
+				} else {
+					// Show ammo progress
+					const ammoProgress = this.ammoTime / this.maxAmmoTime;
+					const barWidth = ammoProgress * 120;
+					this.cooldownFill.setSize(barWidth, 8);
+					
+					// Change color based on ammo state
+					if (ammoProgress > 0.2) {
+						this.cooldownFill.setFillStyle(0x00ff00); // Green when has ammo
+					} else {
+						this.cooldownFill.setFillStyle(0xff4444); // Red when low ammo
+					}
+				}
+			}
+
+			shootBullet() {
+				const currentTime = this.time.now;
+				if (this.isReloading) return; // Can't shoot while reloading
+				if (this.ammoTime < this.shotCost) return; // Not enough ammo
+				if (this.enemies.children.size === 0) return;
+				if (this.ammoQueue.length === 0) return;
+
+				// Spend ammo
+				this.ammoTime -= this.shotCost;
+				this.lastShotTime = currentTime;
+				
+				// Play laser sound effect
+				this.sound.play('laserSound');
+				
+				// Start reloading if ammo is depleted
+				if (this.ammoTime <= 0) {
+					this.isReloading = true;
+					this.reloadStartTime = this.time.now;
+					this.reloadFill.setVisible(true);
+					this.cooldownFill.setVisible(false);
+					this.time.delayedCall(this.reloadTime, () => {
+						this.ammoTime = this.maxAmmoTime;
+						this.isReloading = false;
+						this.reloadFill.setVisible(false);
+						this.cooldownFill.setVisible(true);
+					});
+				}
+				const ammo = this.ammoQueue.shift();
+				this.fillAmmoQueue();
+
+				// Create bullet container to hold laser sprite and text
+				const bulletContainer = this.add.container(this.player.x, this.player.y - 20);
+				
+				// Create laser sprite
+				const laserSprite = this.add.image(0, 0, 'laser');
+				
+				// Random color modulation (red, green, yellow, blue)
+				const colors = [0xff0000, 0x00ff00, 0xffff00, 0x0000ff]; // red, green, yellow, blue
+				const randomColor = colors[Math.floor(Math.random() * colors.length)];
+				laserSprite.setTint(randomColor);
+				
+				// Scale the laser appropriately
+				laserSprite.setScale(2);
+
+				// Add physics to the container
+				this.physics.add.existing(bulletContainer);
+				bulletContainer.body.setSize(laserSprite.width * 0.6, laserSprite.height * 0.6);
+				bulletContainer.body.setVelocityY(-400);
+				
+				// Store bullet data on the container
+				bulletContainer.value = ammo.value;
+				bulletContainer.isCorrect = ammo.isCorrect;
+
+				// Add number text to bullet container
+				const bulletText = this.add.text(0, 0, bulletContainer.value, {
+					fontSize: '12px',
+					fill: '#ffffff',
+					fontFamily: 'Arial',
+					stroke: '#000000',
+					strokeThickness: 1
+				}).setOrigin(0.5);
+
+				// Add both parts to the container
+				bulletContainer.add([laserSprite, bulletText]);
+				
+				// Store references for cleanup
+				bulletContainer.laserSprite = laserSprite;
+				bulletContainer.bulletText = bulletText;
+
+				this.bullets.add(bulletContainer);
+			}
+
+			handleBulletEnemyCollision(bullet, enemy) {
+				if (bullet.value === enemy.answer) {
+					// Hit! (all bullets are correct answers now)
+					this.score += 100 + (this.wave * 10);
+					
+					// Play explosion sound effect
+					this.sound.play('explosionSound', { volume: 0.7 });
+					
+					this.createExplosion(enemy.x, enemy.y);
+					
+					// Explicitly destroy all enemy children first, then the container
+					if (enemy.list && enemy.list.length > 0) {
+						enemy.list.forEach(child => {
+							if (child && child.destroy) {
+								child.destroy();
+				}
+			});
+		}
+					enemy.destroy();
+					
+					// Explicitly destroy all bullet children first, then the container
+					if (bullet.list && bullet.list.length > 0) {
+						bullet.list.forEach(child => {
+							if (child && child.destroy) {
+								child.destroy();
+							}
+						});
+					}
+					bullet.destroy();
+
+					this.updateUI();
+					
+					// Rebuild ammo queue to remove the destroyed enemy's answer (with small delay)
+					this.time.delayedCall(50, () => {
+						this.rebuildAmmoQueue();
+					});
+					
+					// Check if wave completed - use a small delay to ensure destruction is complete
+					this.time.delayedCall(100, () => {
+						if (this.enemies.children.size === 0) {
+							this.time.delayedCall(1000, () => {
+								this.wave++;
+								this.createEnemyWave();
+								this.fillAmmoQueue();
+								this.updateUI();
+							});
+						}
+					});
+				}
+				// Note: Since all bullets are correct answers, we don't need the else case anymore
+			}
+
+			createExplosion(x, y) {
+				// Reduce particle count to minimize texture operations
+				for (let i = 0; i < 6; i++) {
+					const particle = this.add.circle(
+						x + (Math.random() - 0.5) * 40,
+						y + (Math.random() - 0.5) * 40,
+						2, // Smaller fixed size
+						0xffff00
+					);
+
+					this.tweens.add({
+						targets: particle,
+						x: particle.x + (Math.random() - 0.5) * 200,
+						y: particle.y + (Math.random() - 0.5) * 200,
+						alpha: 0,
+						duration: 500,
+						ease: 'Power2',
+						onComplete: () => particle.destroy()
+				});
+			}
+		}
+
+			updateUI() {
+				this.scoreText.setText(`Score: ${this.score}`);
+				this.livesText.setText(`Lives: ${this.lives}`);
+				this.waveText.setText(`Wave: ${this.wave}`);
+			}
+
+			update() {
+				// Player movement
+				if (this.cursors.left.isDown) {
+					this.player.x -= 300 * this.game.loop.delta / 1000;
+				}
+				if (this.cursors.right.isDown) {
+					this.player.x += 300 * this.game.loop.delta / 1000;
+				}
+
+				// Shooting
+				if (Phaser.Input.Keyboard.JustDown(this.spaceKey)) {
+					this.shootBullet();
+				}
+
+				// Update ammo bar visual
+				this.updateCooldownVisual();
+
+				// Move enemies in Space Invaders pattern
+				this.moveEnemies();
+
+				// Check if enemies reached bottom
+				this.enemies.children.entries.forEach(enemy => {
+					if (enemy.y > 500) {
+						this.lives--;
+						enemy.destroy();
+						this.updateUI();
+
+						if (this.lives <= 0) {
+							this.scene.start('GameOverScene', { score: this.score });
+						}
+					}
+				});
+
+				// Remove bullets that are off screen
+				this.bullets.children.entries.forEach(bullet => {
+					if (bullet.y < -50) {
+						// Destroy bullet children first, then container
+						if (bullet.list && bullet.list.length > 0) {
+							bullet.list.forEach(child => {
+								if (child && child.destroy) {
+									child.destroy();
+								}
+							});
+						}
+						bullet.destroy();
+					}
+				});
+			}
+		}
+
+		// Game Over Scene
+		class GameOverScene extends Phaser.Scene {
+			constructor() {
+				super({ key: 'GameOverScene' });
+			}
+
+			init(data) {
+				this.score = data.score || 0;
+			}
+
+			create() {
+				// Background
+				this.add.rectangle(400, 300, 800, 600, 0x001122);
+
+				// Game Over text
+				this.add.text(400, 200, 'MISSION COMPLETE', {
+					fontSize: '32px',
+					fill: '#ff0000',
+					fontFamily: 'Courier New'
+				}).setOrigin(0.5);
+
+				// Final score
+				this.add.text(400, 280, `Final Score: ${this.score} points!`, {
+					fontSize: '20px',
+					fill: '#ffffff',
+					fontFamily: 'Courier New'
+				}).setOrigin(0.5);
+
+				// Play again button
+				const playAgainButton = this.add.text(400, 400, 'PLAY AGAIN', {
+					fontSize: '20px',
+					fill: '#000000',
+					backgroundColor: '#00ff00',
+					padding: { x: 20, y: 10 },
+					fontFamily: 'Courier New'
+				}).setOrigin(0.5);
+
+				playAgainButton.setInteractive();
+				playAgainButton.on('pointerdown', () => {
+					this.scene.start('GameScene');
+				});
+
+				playAgainButton.on('pointerover', () => {
+					playAgainButton.setStyle({ backgroundColor: '#00cc00' });
+				});
+
+				playAgainButton.on('pointerout', () => {
+					playAgainButton.setStyle({ backgroundColor: '#00ff00' });
+				});
+			}
+		}
+
+		// Game configuration
+		const config = {
+			type: Phaser.AUTO,
+			width: 800,
+			height: 600,
+			parent: 'gameContainer',
+			backgroundColor: '#001122',
+			render: {
+				antialias: false,
+				pixelArt: true,
+				roundPixels: true
+			},
+			physics: {
+				default: 'arcade',
+				arcade: {
+					gravity: { y: 0 },
+					//debug: true
+				}
+			},
+			scene: [PreloadScene, StartScene, GameScene, GameOverScene]
+		};
+
+		// Start the game
+		const game = new Phaser.Game(config);
+	</script>
+</body>
+</html>
